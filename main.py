@@ -1,42 +1,47 @@
 import torch
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from sklearn.model_selection import KFold
-from sklearn.metrics import roc_curve
 
 from config import config
 from data_utils import prepare_dataset
 from dataset import get_dataset, get_loader
-from models.custom_cnn import CustomCNN
+from models import CustomCNN
 from train import train_epoch
 from evaluate import evaluate
+from analysis.visualization import plot_roc, plot_histogram
+from analysis.gradcam_utils import generate_gradcam
 
 import torch.nn as nn
 
 
 def main():
-
     dataset_path = prepare_dataset()
 
     dataset = get_dataset(dataset_path)
 
-    kf = KFold(n_splits=5, shuffle=True)
+    print("Dataset size:", len(dataset))
+    print("Classes:", dataset.classes)
 
-    results = []
+    kf = KFold(n_splits=5, shuffle=True)
 
     device = config["device"]
 
-    for fold,(train_idx,val_idx) in enumerate(kf.split(dataset)):
+    results = []
 
-        print(f"Fold {fold+1}")
+    for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
 
-        train_loader = get_loader(dataset,train_idx,config["batch_size"])
-        val_loader = get_loader(dataset,val_idx,config["batch_size"])
+        print(f"FOLD {fold+1}")
+
+        train_loader = get_loader(dataset, train_idx, config["batch_size"])
+        val_loader = get_loader(dataset, val_idx, config["batch_size"])
 
         model = CustomCNN().to(device)
 
-        optimizer = torch.optim.Adam(model.parameters(),lr=config["lr"])
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=config["lr"]
+        )
 
         criterion = nn.CrossEntropyLoss()
 
@@ -50,28 +55,51 @@ def main():
                 device
             )
 
-            print(f"Epoch {epoch} Loss {loss}")
+            print(f"Epoch {epoch+1}/{config['epochs']}  Loss: {loss:.4f}")
 
-        acc,auc,preds,labels = evaluate(model,val_loader,device)
+        acc, auc, preds, labels = evaluate(
+        model,
+        val_loader,
+        device
+    )
 
-        print("ACC:",acc,"AUC:",auc)
+        print(f"Validation ACC: {acc:.4f}")
+        print(f"Validation AUC: {auc:.4f}")
 
-        results.append({"fold":fold,"acc":acc,"auc":auc})
+        torch.save(
+            model.state_dict(),
+            f"results/model_fold{fold}.pth"
+        )
 
-        fpr,tpr,_ = roc_curve(labels,preds)
+        plot_roc(labels, preds, fold)
+        plot_histogram(preds, fold)
 
-        plt.plot(fpr,tpr)
+        generate_gradcam(
+            model,
+            val_loader,
+            device,
+            target_layer=model.conv2,
+            fold=fold,
+            num_images=5
+        )
 
-        torch.save(model.state_dict(),f"results/model_fold{fold}.pth")
+        results.append({
+            "fold": fold,
+            "accuracy": acc,
+            "auc": auc
+        })
 
     df = pd.DataFrame(results)
 
-    df.to_excel("results/results.xlsx")
+    df.to_excel("results/results.xlsx", index=False)
 
     print(df)
 
-    print("Mean ACC:",df["acc"].mean())
-    print("STD ACC:",df["acc"].std())
+    print("\nMean Accuracy:", df["accuracy"].mean())
+    print("STD Accuracy:", df["accuracy"].std())
+
+    print("\nMean AUC:", df["auc"].mean())
+    print("STD AUC:", df["auc"].std())
 
 
 if __name__ == "__main__":
