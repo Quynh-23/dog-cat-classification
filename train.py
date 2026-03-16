@@ -1,8 +1,10 @@
 import torch
 
-def train(model, loader, optimizer, criterion, device):
+
+def train_epoch(model, loader, optimizer, criterion, device):
 
     model.train()
+
     total_loss = 0
 
     for images, labels in loader:
@@ -21,5 +23,5 @@ def train(model, loader, optimizer, criterion, device):
         optimizer.step()
 
         total_loss += loss.item()
-    
-    return total_loss/ len(loader)
+
+    return total_loss / len(loader)
