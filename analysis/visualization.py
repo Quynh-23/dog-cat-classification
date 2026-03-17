@@ -18,3 +18,18 @@ def plot_roc(labels, preds, fold):
 
     plt.savefig(f"results/roc_fold{fold}.png")
     plt.close()
+
+def plot_histogram(preds, fold):
+
+    plt.figure()
+
+    plt.hist(preds, bins=20)
+
+    plt.xlabel("Predicted Probability")
+    plt.ylabel("Count")
+
+    plt.title(f"Prediction Histogram Fold {fold}")
+
+    plt.savefig(f"results/hist_fold{fold}.png")
+
+    plt.close()
