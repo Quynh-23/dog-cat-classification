@@ -8,7 +8,8 @@ from sklearn.model_selection import KFold
 from config import config
 from data_utils import prepare_dataset
 from dataset import get_dataset, get_loader
-from models.custom_cnn import CustomCNN
+# from models.custom_cnn import CustomCNN
+from models.CustomResNetSE import CustomResNetSE
 from train import train_epoch
 from evaluate import evaluate
 from analysis.visualization import plot_roc, plot_histogram
@@ -50,7 +51,7 @@ def main():
         train_loader = get_loader(dataset, train_idx, batch_size)
         val_loader = get_loader(dataset, val_idx, batch_size)
 
-        model = CustomCNN().to(device)
+        model = CustomResNetSE().to(device)
 
         optimizer = torch.optim.Adam(
             model.parameters(),
@@ -97,7 +98,7 @@ def main():
 
         torch.save(
             model.state_dict(),
-            f"results/model_fold{fold}.pth"
+            f"results/model_fold_customResnet{fold}.pth"
         )
 
         results.append({
@@ -108,7 +109,7 @@ def main():
 
     df = pd.DataFrame(results)
 
-    df.to_excel("results/results.xlsx", index=False)
+    df.to_excel("results/results_customResnet.xlsx", index=False)
 
     mean_acc = df["accuracy"].mean()
 
@@ -124,11 +125,7 @@ def main():
     print("\nMean AUC:", df["auc"].mean())
     print("STD AUC:", df["auc"].std())
 
-    # =========================
-    # Report result to NNI
-    # =========================
     nni.report_final_result(mean_acc)
-
 
 if __name__ == "__main__":
     main()
