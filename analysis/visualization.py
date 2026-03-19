@@ -16,7 +16,7 @@ def plot_roc(labels, preds, fold):
     plt.title(f"ROC Curve Fold {fold}")
     plt.legend()
 
-    plt.savefig(f"results/roc_fold{fold}.png")
+    plt.savefig(f"results/roc_fold__customResnet{fold}.png")
     plt.close()
 
 def plot_histogram(preds, fold):
@@ -30,6 +30,6 @@ def plot_histogram(preds, fold):
 
     plt.title(f"Prediction Histogram Fold {fold}")
 
-    plt.savefig(f"results/hist_fold{fold}.png")
+    plt.savefig(f"results/hist_fold__customResnet{fold}.png")
 
     plt.close()
