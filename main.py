@@ -1,42 +1,51 @@
-import nni
-import torch
-import pandas as pd
 import os
+import copy
+import random
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import nni
 
 from sklearn.model_selection import KFold
 
 from config import config
 from data_utils import prepare_dataset
 from dataset import get_dataset, get_loader
-# from models.custom_cnn import CustomCNN
 from models.CustomResNetSE import CustomResNetSE
 from train import train_epoch
 from evaluate import evaluate
 from analysis.visualization import plot_roc, plot_histogram
 from analysis.gradcam_utils import generate_gradcam
 
-import torch.nn as nn
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def main():
+
+    set_seed(42)
 
     os.makedirs("results", exist_ok=True)
 
     params = nni.get_next_parameter()
 
-    lr = params.get("lr", config["lr"])
+    lr = params.get("learning_rate", config["lr"])
     batch_size = params.get("batch_size", config["batch_size"])
 
     print("NNI params:", params)
 
     dataset_path = prepare_dataset()
-
     dataset = get_dataset(dataset_path)
 
     print("Dataset size:", len(dataset))
     print("Classes:", dataset.classes)
 
-    kf = KFold(n_splits=5, shuffle=True)
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
     device = config["device"]
 
@@ -44,21 +53,18 @@ def main():
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
 
-        print("\n==========================")
         print(f"FOLD {fold}")
-        print("==========================")
 
         train_loader = get_loader(dataset, train_idx, batch_size)
         val_loader = get_loader(dataset, val_idx, batch_size)
 
         model = CustomResNetSE().to(device)
 
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=lr
-        )
-
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         criterion = nn.CrossEntropyLoss()
+
+        best_auc = -1
+        best_model = copy.deepcopy(model.state_dict())
 
         for epoch in range(config["epochs"]):
 
@@ -70,10 +76,24 @@ def main():
                 device
             )
 
+            acc, auc, _, _ = evaluate(
+                model,
+                val_loader,
+                device
+            )
+
             print(
                 f"Epoch {epoch+1}/{config['epochs']} "
-                f"Loss: {loss:.4f}"
+                f"Loss: {loss:.4f} "
+                f"Val ACC: {acc:.4f} "
+                f"Val AUC: {auc:.4f}"
             )
+
+            if auc > best_auc:
+                best_auc = auc
+                best_model = copy.deepcopy(model.state_dict())
+
+        model.load_state_dict(best_model)
 
         acc, auc, preds, labels = evaluate(
             model,
@@ -81,8 +101,8 @@ def main():
             device
         )
 
-        print(f"Validation ACC: {acc:.4f}")
-        print(f"Validation AUC: {auc:.4f}")
+        print(f"\nBest Validation ACC: {acc:.4f}")
+        print(f"Best Validation AUC: {auc:.4f}")
 
         plot_roc(labels, preds, fold)
         plot_histogram(preds, fold)
@@ -91,14 +111,15 @@ def main():
             model,
             val_loader,
             device,
-            target_layer=model.conv2,
+            target_layer=model.layer3.conv2,
             fold=fold,
             num_images=5
         )
 
+        # Save model
         torch.save(
             model.state_dict(),
-            f"results/model_fold_customResnet{fold}.pth"
+            f"results/model_fold_{fold}.pth"
         )
 
         results.append({
@@ -108,24 +129,29 @@ def main():
         })
 
     df = pd.DataFrame(results)
-
-    df.to_excel("results/results_customResnet.xlsx", index=False)
+    df.to_excel("results/results.xlsx", index=False)
 
     mean_acc = df["accuracy"].mean()
+    std_acc = df["accuracy"].std()
 
-    print("\n==========================")
+    mean_auc = df["auc"].mean()
+    std_auc = df["auc"].std()
+
+    ci_auc = 1.96 * std_auc / (len(df) ** 0.5)
+
     print("FINAL RESULTS")
-    print("==========================")
 
     print(df)
 
     print("\nMean Accuracy:", mean_acc)
-    print("STD Accuracy:", df["accuracy"].std())
+    print("STD Accuracy:", std_acc)
 
-    print("\nMean AUC:", df["auc"].mean())
-    print("STD AUC:", df["auc"].std())
+    print("\nMean AUC:", mean_auc)
+    print("STD AUC:", std_auc)
+    print("95% CI AUC:", ci_auc)
 
-    nni.report_final_result(mean_acc)
+    nni.report_final_result(mean_auc)
+
 
 if __name__ == "__main__":
     main()
