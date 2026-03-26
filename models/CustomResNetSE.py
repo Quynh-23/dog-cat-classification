@@ -18,61 +18,70 @@ class SEBlock(nn.Module):
 
         return x * y
 
-class ResidualSEBlock(nn.Module):
+class SpatialAttention(nn.Module):  
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.cat([avg_out, max_out], dim=1)        
+        out = torch.sigmoid(nn.Conv2d(2, 1, kernel_size=7, padding=3)(out))
+        return x * out
+
+
+class ResidualSEBlock(nn.Module):   
     def __init__(self, in_channels, out_channels, stride=1):
-        super(ResidualSEBlock, self).__init__()
-
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride, 1)
+        super().__init__()
+        
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride, 1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
-
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, 1)
+        
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, 1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
-
+        
         self.se = SEBlock(out_channels)
-
-        # shortcut
+        self.sa = SpatialAttention()          
+        
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, 1, stride),
+                nn.Conv2d(in_channels, out_channels, 1, stride, bias=False),
                 nn.BatchNorm2d(out_channels)
             )
 
     def forward(self, x):
+        residual = self.shortcut(x)
+        
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
+        
+        out = self.se(out)      
+        out = self.sa(out) 
 
-        out = self.se(out)
-
-        out += self.shortcut(x)
+        out += residual       
         out = F.relu(out)
-
         return out
 
 class CustomResNetSE(nn.Module):
     def __init__(self, num_classes=2):
-        super(CustomResNetSE, self).__init__()
-
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-
-        self.layer1 = ResidualSEBlock(32, 64, stride=2)
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 64, 7, stride=2, padding=3, bias=False)  # giống ResNet gốc hơn
+        self.bn1 = nn.BatchNorm2d(64)
+        self.maxpool = nn.MaxPool2d(3, stride=2, padding=1)
+        
+        self.layer1 = ResidualSEBlock(64, 64)
         self.layer2 = ResidualSEBlock(64, 128, stride=2)
         self.layer3 = ResidualSEBlock(128, 256, stride=2)
-
+        self.layer4 = ResidualSEBlock(256, 512, stride=2)   # thêm 1 layer nữa cho mạnh
+        
         self.pool = nn.AdaptiveAvgPool2d(1)
-
-        self.fc = nn.Linear(256, num_classes)
-
+        self.fc = nn.Linear(512, num_classes)
+        
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-
-        out = self.pool(out)
-        out = out.view(out.size(0), -1)
-
-        out = self.fc(out)
-        return out
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        return self.fc(x)
