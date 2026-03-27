@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# =========================
+# SE BLOCK
+# =========================
 class SEBlock(nn.Module):
     def __init__(self, channels, reduction=16):
         super().__init__()
@@ -15,6 +18,10 @@ class SEBlock(nn.Module):
         y = torch.sigmoid(self.fc2(y)).view(b, c, 1, 1)
         return x * y
 
+
+# =========================
+# SPATIAL ATTENTION
+# =========================
 class SpatialAttention(nn.Module):
     def __init__(self, kernel_size=7):
         super().__init__()
@@ -27,17 +34,25 @@ class SpatialAttention(nn.Module):
         attn = torch.sigmoid(self.conv(x_cat))
         return x * attn
 
+
+# =========================
+# 🔥 IMPROVED SCALE ATTENTION
+# =========================
 class ScaleAttention(nn.Module):
     def __init__(self, channels, num_scales):
         super().__init__()
         self.fc = nn.Linear(channels, num_scales)
 
     def forward(self, features):
+        # features: list of [B, C, H, W]
         stacked = torch.stack(features, dim=1)  # [B, S, C, H, W]
         b, s, c, h, w = stacked.shape
 
         pooled = stacked.mean(dim=[3,4])  # [B, S, C]
-        weights = self.fc(pooled.mean(dim=1))  # [B, S]
+
+        # 🔥 learn weight per scale properly
+        weights = self.fc(pooled)  # [B, S, S]
+        weights = weights.mean(dim=2)  # [B, S]
         weights = torch.softmax(weights, dim=1)
 
         weights = weights.view(b, s, 1, 1, 1)
@@ -45,6 +60,10 @@ class ScaleAttention(nn.Module):
 
         return out
 
+
+# =========================
+# MULTI-BRANCH BLOCK
+# =========================
 class MultiBranchResidualSEBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, num_branches=3):
         super().__init__()
@@ -101,6 +120,10 @@ class MultiBranchResidualSEBlock(nn.Module):
         out += residual
         return F.relu(out)
 
+
+# =========================
+# PROJECTION HEAD (FOR CL)
+# =========================
 class ProjectionHead(nn.Module):
     def __init__(self, in_dim, proj_dim=128):
         super().__init__()
@@ -113,6 +136,10 @@ class ProjectionHead(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
+# =========================
+# 🔥 MAIN MODEL (FINAL)
+# =========================
 class MultiBranchResNetImproved(nn.Module):
     def __init__(self, num_classes=2):
         super().__init__()
@@ -127,12 +154,16 @@ class MultiBranchResNetImproved(nn.Module):
         self.layer3 = MultiBranchResidualSEBlock(128, 256, stride=2)
         self.layer4 = MultiBranchResidualSEBlock(256, 512, stride=2)
 
+        # multistage heads
         self.head1 = nn.Linear(64, num_classes)
         self.head2 = nn.Linear(128, num_classes)
         self.head3 = nn.Linear(256, num_classes)
         self.head4 = nn.Linear(512, num_classes)
 
         self.projection = ProjectionHead(512)
+
+        # 🔥 learnable fusion weights
+        self.stage_weights = nn.Parameter(torch.ones(4))
 
     def forward(self, x, return_features=False):
         x = self.relu(self.bn1(self.conv1(x)))
@@ -151,15 +182,26 @@ class MultiBranchResNetImproved(nn.Module):
         p3 = pool(f3)
         p4 = pool(f4)
 
+        # multistage outputs
         out1 = self.head1(p1)
         out2 = self.head2(p2)
         out3 = self.head3(p3)
         out4 = self.head4(p4)
 
-        out = (out1 + out2 + out3 + out4) / 4
+        # 🔥 learnable weighted fusion
+        weights = torch.softmax(self.stage_weights, dim=0)
+
+        out = (
+            weights[0]*out1 +
+            weights[1]*out2 +
+            weights[2]*out3 +
+            weights[3]*out4
+        )
 
         if return_features:
             proj = self.projection(p4)
-            return out, proj, [p1, p2, p3, p4]
+
+            # 🔥 RETURN EVERYTHING (important)
+            return out, proj, [out1, out2, out3, out4], [p1, p2, p3, p4]
 
         return out
